@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use alloy_sol_types::sol;
 
-use stylus_sdk::{alloy_primitives::U256, prelude::*};
+use stylus_sdk::{alloy_primitives::U256, alloy_primitives::Address, prelude::*};
 
 sol! {
     #[derive(Debug)]
@@ -93,6 +93,12 @@ impl RewardProcessor {
         }
         Ok(())
     }
+
+    pub fn transfer_ownership(&mut self, new_owner: Address) -> Result<(), CommonError> {
+        self.assert_owner()?;
+        self.owner.set(new_owner);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +173,58 @@ mod test {
 
         let multiply_factor_check2 = contract.multiply_factor.get();
         assert_eq!(multiply_factor_check2, U256::from(2000000));
+    }
+
+    #[test]
+    fn test_transfer_ownership_success() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+
+        let result = contract.constructor(U256::from(1000000));
+        assert!(result.is_ok());
+
+        let initial_owner = contract.owner.get();
+        assert_eq!(initial_owner, Address::from([0x01; 20]));
+
+        let new_owner_address = Address::from([0x03; 20]);
+        let transfer_result = contract.transfer_ownership(new_owner_address);
+        
+        assert!(transfer_result.is_ok());
+        
+        let updated_owner = contract.owner.get();
+        assert_eq!(updated_owner, new_owner_address);
+    }
+
+    #[test]
+    fn test_transfer_ownership_unauthorized() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+
+        let result = contract.constructor(U256::from(1000000));
+        assert!(result.is_ok());
+
+        let vm2 = TestVMBuilder::new()
+            .sender(Address::from([0x02; 20]))
+            .build();
+        
+        let mut contract2 = RewardProcessor::from(&vm2);
+        
+        let new_owner_address = Address::from([0x03; 20]);
+        let transfer_result = contract2.transfer_ownership(new_owner_address);
+        
+        assert!(transfer_result.is_err());
+        assert!(matches!(
+            transfer_result.unwrap_err(),
+            CommonError::Unauthorized(_)
+        ));
+        
+        let owner_check = contract.owner.get();
+        assert_eq!(owner_check, Address::from([0x01; 20]));
     }
 }
