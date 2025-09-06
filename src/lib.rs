@@ -28,6 +28,8 @@ sol_storage! {
         address owner;
         uint256 percentage_denominator;
         uint256 percentage_bonus;
+
+        
     }
 }
 
@@ -63,8 +65,34 @@ impl RewardProcessor {
         Ok(())
     }
 
-    pub fn calculate_reward(&self, amount: U256, has_bonus: bool, has_strict_bonus: bool) -> U256 {
+    pub fn calculate_reward(&self, amount: U256, start_time: U256, end_time: U256, has_bonus: bool, has_strict_bonus: bool) -> U256 {
+        let current_time = U256::from(self.vm().block_timestamp());
+        self.calculate_reward_at_time(amount, current_time, start_time, end_time, has_bonus, has_strict_bonus)
+    }
+
+    pub fn calculate_reward_at_time(&self, amount: U256, current_time: U256, start_time: U256, end_time: U256, has_bonus: bool, has_strict_bonus: bool) -> U256 {
         let mut reward = amount;
+        
+        let time_decay_multiplier = if current_time <= start_time {
+            self.percentage_denominator.get()
+
+        } else if current_time >= end_time {
+
+            self.percentage_denominator.get() / U256::from(2)
+        } else {
+            let total_duration = end_time - start_time;
+            let elapsed_time = current_time - start_time;
+            
+            let max_multiplier = self.percentage_denominator.get();
+            let min_multiplier = self.percentage_denominator.get() / U256::from(2); // 50%
+            let decay_range = max_multiplier - min_multiplier;
+            
+            let decay_amount = decay_range * elapsed_time / total_duration;
+            max_multiplier - decay_amount
+        };
+        
+        reward = reward * time_decay_multiplier / self.percentage_denominator.get();
+        
         if has_bonus {
             reward += amount * self.percentage_bonus.get() / self.percentage_denominator.get();
         }
@@ -226,5 +254,85 @@ mod test {
         
         let owner_check = contract.owner.get();
         assert_eq!(owner_check, Address::from([0x01; 20]));
+    }
+
+    #[test]
+    fn test_time_based_reward_decay() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000)); // 50% strict bonus
+        assert!(result.is_ok());
+
+        let amount = U256::from(1000);
+        let start_time = U256::from(1000);
+        let end_time = U256::from(2000);
+
+        // Test at start time (should get 100% base reward)
+        let reward_at_start = contract.calculate_reward_at_time(amount, U256::from(1000), start_time, end_time, false, false);
+        assert_eq!(reward_at_start, amount); // 100% of base amount
+
+        // Test with timestamp in the middle (should get 75% base reward)
+        let reward_at_middle = contract.calculate_reward_at_time(amount, U256::from(1500), start_time, end_time, false, false);
+        assert_eq!(reward_at_middle, U256::from(750)); // 75% of base amount
+
+        // Test at end time (should get 50% base reward)
+        let reward_at_end = contract.calculate_reward_at_time(amount, U256::from(2000), start_time, end_time, false, false);
+        assert_eq!(reward_at_end, U256::from(500)); // 50% of base amount
+    }
+
+    #[test]
+    fn test_time_based_reward_with_bonuses() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000)); // 50% strict bonus
+        assert!(result.is_ok());
+
+        let amount = U256::from(1000);
+        let start_time = U256::from(1000);
+        let end_time = U256::from(2000);
+
+        // Test with both bonuses at start time
+        let reward_with_bonuses = contract.calculate_reward_at_time(amount, U256::from(1000), start_time, end_time, true, true);
+        
+        // Expected: base (1000) + percentage bonus (100) + strict bonus (500) = 1600
+        // Base reward gets time decay (100% at start), bonuses are added on top
+        let expected = U256::from(1000) + U256::from(100) + U256::from(500);
+        assert_eq!(reward_with_bonuses, expected);
+
+        // Test with bonuses at middle time
+        let reward_middle_with_bonuses = contract.calculate_reward_at_time(amount, U256::from(1500), start_time, end_time, true, true);
+        
+        // Expected: base with decay (750) + percentage bonus (100) + strict bonus (500) = 1350
+        let expected_middle = U256::from(750) + U256::from(100) + U256::from(500);
+        assert_eq!(reward_middle_with_bonuses, expected_middle);
+    }
+
+    #[test]
+    fn test_time_based_reward_edge_cases() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        let amount = U256::from(1000);
+        let start_time = U256::from(1000);
+        let end_time = U256::from(2000);
+
+        // Test before start time
+        let reward_before_start = contract.calculate_reward_at_time(amount, U256::from(500), start_time, end_time, false, false);
+        assert_eq!(reward_before_start, amount); // Should get full reward
+
+        // Test after end time
+        let reward_after_end = contract.calculate_reward_at_time(amount, U256::from(3000), start_time, end_time, false, false);
+        assert_eq!(reward_after_end, U256::from(500)); // Should get minimum reward (50%)
     }
 }
