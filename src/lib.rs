@@ -270,17 +270,14 @@ mod test {
         let start_time = U256::from(1000);
         let end_time = U256::from(2000);
 
-        // Test at start time (should get 100% base reward)
         let reward_at_start = contract.calculate_reward_at_time(amount, U256::from(1000), start_time, end_time, false, false);
-        assert_eq!(reward_at_start, amount); // 100% of base amount
+        assert_eq!(reward_at_start, amount);
 
-        // Test with timestamp in the middle (should get 75% base reward)
         let reward_at_middle = contract.calculate_reward_at_time(amount, U256::from(1500), start_time, end_time, false, false);
-        assert_eq!(reward_at_middle, U256::from(750)); // 75% of base amount
+        assert_eq!(reward_at_middle, U256::from(750));
 
-        // Test at end time (should get 50% base reward)
         let reward_at_end = contract.calculate_reward_at_time(amount, U256::from(2000), start_time, end_time, false, false);
-        assert_eq!(reward_at_end, U256::from(500)); // 50% of base amount
+        assert_eq!(reward_at_end, U256::from(500));
     }
 
     #[test]
@@ -297,18 +294,13 @@ mod test {
         let start_time = U256::from(1000);
         let end_time = U256::from(2000);
 
-        // Test with both bonuses at start time
         let reward_with_bonuses = contract.calculate_reward_at_time(amount, U256::from(1000), start_time, end_time, true, true);
         
-        // Expected: base (1000) + percentage bonus (100) + strict bonus (500) = 1600
-        // Base reward gets time decay (100% at start), bonuses are added on top
         let expected = U256::from(1000) + U256::from(100) + U256::from(500);
         assert_eq!(reward_with_bonuses, expected);
 
-        // Test with bonuses at middle time
         let reward_middle_with_bonuses = contract.calculate_reward_at_time(amount, U256::from(1500), start_time, end_time, true, true);
         
-        // Expected: base with decay (750) + percentage bonus (100) + strict bonus (500) = 1350
         let expected_middle = U256::from(750) + U256::from(100) + U256::from(500);
         assert_eq!(reward_middle_with_bonuses, expected_middle);
     }
@@ -327,12 +319,10 @@ mod test {
         let start_time = U256::from(1000);
         let end_time = U256::from(2000);
 
-        // Test before start time
         let reward_before_start = contract.calculate_reward_at_time(amount, U256::from(500), start_time, end_time, false, false);
-        assert_eq!(reward_before_start, amount); // Should get full reward
+        assert_eq!(reward_before_start, amount);
 
-        // Test after end time
         let reward_after_end = contract.calculate_reward_at_time(amount, U256::from(3000), start_time, end_time, false, false);
-        assert_eq!(reward_after_end, U256::from(500)); // Should get minimum reward (50%)
+        assert_eq!(reward_after_end, U256::from(500));
     }
 }
