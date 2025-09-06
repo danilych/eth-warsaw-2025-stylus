@@ -1,26 +1,3 @@
-//!
-//! Stylus Hello World
-//!
-//! The following contract implements the Counter example from Foundry.
-//!
-//! ```solidity
-//! contract Counter {
-//!     uint256 public number;
-//!     function setNumber(uint256 newNumber) public {
-//!         number = newNumber;
-//!     }
-//!     function increment() public {
-//!         number++;
-//!     }
-//! }
-//! ```
-//!
-//! The program is ABI-equivalent with Solidity, which means you can call it from both Solidity and Rust.
-//! To do this, run `cargo stylus export-abi`.
-//!
-//! Note: this code is a template-only and has not been audited.
-//!
-// Allow `cargo stylus export-abi` to generate a main function.
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 #![cfg_attr(not(any(test, feature = "export-abi")), no_std)]
 
@@ -29,83 +6,166 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-/// Import items from the SDK. The prelude contains common traits and macros.
+use alloy_sol_types::sol;
+
 use stylus_sdk::{alloy_primitives::U256, prelude::*};
 
-// Define some persistent storage using the Solidity ABI.
-// `Counter` will be the entrypoint.
+sol! {
+    #[derive(Debug)]
+    error InvalidMultiplyFactor();
+
+    #[derive(Debug)]
+    error Unauthorized();
+
+    #[derive(Debug)]
+    error ZeroValue();
+}
+
 sol_storage! {
     #[entrypoint]
-    pub struct Counter {
-        uint256 number;
+    pub struct RewardProcessor {
+        uint256 multiply_factor;
+        address owner;
+        uint256 percentage_denominator;
+        uint256 percentage_bonus;
     }
 }
 
-/// Declare that `Counter` is a contract with the following external methods.
+#[derive(SolidityError, Debug)]
+pub enum ConstructorError {
+    InvalidMultiplyFactor(InvalidMultiplyFactor),
+}
+
+#[derive(SolidityError, Debug)]
+pub enum CommonError {
+    Unauthorized(Unauthorized),
+    ZeroValue(ZeroValue),
+    InvalidMultiplyFactor(InvalidMultiplyFactor),
+}
+
 #[public]
-impl Counter {
-    /// Gets the number from storage.
-    pub fn number(&self) -> U256 {
-        self.number.get()
-    }
-
-    /// Sets a number in storage to a user-specified value.
-    pub fn set_number(&mut self, new_number: U256) {
-        self.number.set(new_number);
-    }
-
-    /// Sets a number in storage to a user-specified value.
-    pub fn mul_number(&mut self, new_number: U256) {
-        self.number.set(new_number * self.number.get());
-    }
-
-    /// Sets a number in storage to a user-specified value.
-    pub fn add_number(&mut self, new_number: U256) {
-        self.number.set(new_number + self.number.get());
-    }
-
-    /// Increments `number` and updates its value in storage.
-    pub fn increment(&mut self) {
-        let number = self.number.get();
-        self.set_number(number + U256::from(1));
-    }
-
-    /// Adds the wei value from msg_value to the number in storage.
+impl RewardProcessor {
+    #[constructor]
     #[payable]
-    pub fn add_from_msg_value(&mut self) {
-        let number = self.number.get();
-        self.set_number(number + self.vm().msg_value());
+    pub fn constructor(
+        &mut self,
+        multiply_factor_: U256,
+    ) -> Result<(), ConstructorError> {
+        if multiply_factor_ == U256::ZERO {
+            return Err(ConstructorError::InvalidMultiplyFactor(InvalidMultiplyFactor {}));
+        }
+
+        self.multiply_factor.set(multiply_factor_);
+        self.owner.set(self.vm().tx_origin());
+        self.percentage_denominator.set(U256::from(10000));
+        self.percentage_bonus.set(U256::from(1000));
+
+        Ok(())
+    }
+
+    pub fn calculate_reward(&self, amount: U256, has_bonus: bool, has_strict_bonus: bool) -> U256 {
+        let mut reward = amount;
+        if has_bonus {
+            reward += amount * self.percentage_bonus.get() / self.percentage_denominator.get();
+        }
+
+        if has_strict_bonus {
+            reward += amount * self.multiply_factor.get() / self.percentage_denominator.get();
+        }
+
+        reward
+    }
+
+    pub fn update_multiply_factor(&mut self, new_factor: U256) -> Result<(), CommonError> {
+        self.assert_owner()?;
+        
+        if new_factor == U256::ZERO {
+            return Err(CommonError::InvalidMultiplyFactor(InvalidMultiplyFactor {}));
+        }
+        
+        self.multiply_factor.set(new_factor);
+        Ok(())
+    }
+
+    pub fn assert_owner(&self) -> Result<(), CommonError> {
+        if self.vm().tx_origin() != self.owner.get() {
+            return Err(CommonError::Unauthorized(Unauthorized {}));
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
+    use alloy_primitives::Address;
+    use stylus_sdk::testing::TestVMBuilder;
+
     use super::*;
 
     #[test]
-    fn test_counter() {
-        use stylus_sdk::testing::*;
-        let vm = TestVM::default();
-        let mut contract = Counter::from(&vm);
+    fn test_assert_owner() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
 
-        assert_eq!(U256::ZERO, contract.number());
+        let mut contract = RewardProcessor::from(&vm);
 
-        contract.increment();
-        assert_eq!(U256::from(1), contract.number());
+        let result = contract.constructor(U256::from(1000000));
 
-        contract.add_number(U256::from(3));
-        assert_eq!(U256::from(4), contract.number());
+        assert!(result.is_ok());
+        
+        let owner_check = contract.assert_owner();
+        assert!(owner_check.is_ok());
+        
+        let vm2 = TestVMBuilder::new()
+            .sender(Address::from([0x02; 20]))
+            .build();
+        
+        let contract2 = RewardProcessor::from(&vm2);
+        
+        let unauthorized_check = contract2.assert_owner();
+        assert!(unauthorized_check.is_err());
+        assert!(matches!(
+            unauthorized_check.unwrap_err(),
+            CommonError::Unauthorized(_)
+        ));
+    }
 
-        contract.mul_number(U256::from(2));
-        assert_eq!(U256::from(8), contract.number());
+    #[test]
+    fn test_update_multiply_factor() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
 
-        contract.set_number(U256::from(100));
-        assert_eq!(U256::from(100), contract.number());
+        let mut contract = RewardProcessor::from(&vm);
 
-        // Override the msg value for future contract method invocations.
-        vm.set_value(U256::from(2));
+        let result = contract.constructor(U256::from(1000000));
 
-        contract.add_from_msg_value();
-        assert_eq!(U256::from(102), contract.number());
+        assert!(result.is_ok());
+        
+        let owner_check = contract.assert_owner();
+        assert!(owner_check.is_ok());
+        
+        let vm2 = TestVMBuilder::new()
+            .sender(Address::from([0x02; 20]))
+            .build();
+        
+        let mut contract2 = RewardProcessor::from(&vm2);
+        
+        let unauthorized_check = contract2.update_multiply_factor(U256::from(2000000));
+        assert!(unauthorized_check.is_err());
+        assert!(matches!(
+            unauthorized_check.unwrap_err(),
+            CommonError::Unauthorized(_)
+        ));
+
+        let multiply_factor_check = contract.multiply_factor.get();
+        assert_eq!(multiply_factor_check, U256::from(1000000));
+
+        let update_result = contract.update_multiply_factor(U256::from(2000000));
+        assert!(update_result.is_ok());
+
+        let multiply_factor_check2 = contract.multiply_factor.get();
+        assert_eq!(multiply_factor_check2, U256::from(2000000));
     }
 }
