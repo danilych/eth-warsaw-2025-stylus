@@ -8,7 +8,16 @@ use alloc::vec::Vec;
 
 use alloy_sol_types::sol;
 
+use stylus_sdk::evm::log;
+use alloy_sol_types::SolEvent;
+
 use stylus_sdk::{alloy_primitives::U256, alloy_primitives::Address, prelude::*};
+
+sol! {
+    event MultiplyFactorUpdated(address indexed sender, uint256 multiply_factor);
+    event PercentageBonusUpdated(address indexed sender, uint256 percentage_bonus);
+    event OwnershipTransferred(address indexed previous_owner, address indexed new_owner);
+}
 
 sol! {
     #[derive(Debug)]
@@ -28,8 +37,6 @@ sol_storage! {
         address owner;
         uint256 percentage_denominator;
         uint256 percentage_bonus;
-
-        
     }
 }
 
@@ -112,6 +119,29 @@ impl RewardProcessor {
         }
         
         self.multiply_factor.set(new_factor);
+
+        log(MultiplyFactorUpdated {
+            sender: self.vm().tx_origin(),
+            multiply_factor: new_factor,
+        });
+
+        Ok(())
+    }
+
+    pub fn update_percentage_bonus(&mut self, new_bonus: U256) -> Result<(), CommonError> {
+        self.assert_owner()?;
+        
+        if new_bonus == U256::ZERO {
+            return Err(CommonError::ZeroValue(ZeroValue {}));
+        }
+        
+        self.percentage_bonus.set(new_bonus);
+
+        log(PercentageBonusUpdated {
+            sender: self.vm().tx_origin(),
+            percentage_bonus: new_bonus,
+        });
+
         Ok(())
     }
 
@@ -125,6 +155,12 @@ impl RewardProcessor {
     pub fn transfer_ownership(&mut self, new_owner: Address) -> Result<(), CommonError> {
         self.assert_owner()?;
         self.owner.set(new_owner);
+
+        log(OwnershipTransferred {
+            previous_owner: self.vm().tx_origin(),
+            new_owner,
+        });
+        
         Ok(())
     }
 }
