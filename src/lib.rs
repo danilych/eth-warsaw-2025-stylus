@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use alloy_sol_types::sol;
 
-use stylus_sdk::{alloy_primitives::U256, alloy_primitives::Address, prelude::*, crypto::keccak, evm};
+use stylus_sdk::{alloy_primitives::U256, alloy_primitives::Address, prelude::*, crypto::keccak};
 
 sol! {
     event MultiplyFactorUpdated(address indexed sender, uint256 multiply_factor);
@@ -138,7 +138,7 @@ impl RewardProcessor {
         
         self.multiply_factor.set(new_factor);
 
-        evm::log(MultiplyFactorUpdated {
+        log(self.vm(), MultiplyFactorUpdated {
             sender: self.vm().tx_origin(),
             multiply_factor: new_factor,
         });
@@ -155,7 +155,7 @@ impl RewardProcessor {
         
         self.percentage_bonus.set(new_bonus);
 
-        evm::log(PercentageBonusUpdated {
+        log(self.vm(), PercentageBonusUpdated {
             sender: self.vm().tx_origin(),
             percentage_bonus: new_bonus,
         });
@@ -174,7 +174,7 @@ impl RewardProcessor {
         self.assert_owner()?;
         self.owner.set(new_owner);
 
-        evm::log(OwnershipTransferred {
+        log(self.vm(), OwnershipTransferred {
             previous_owner: self.vm().tx_origin(),
             new_owner,
         });
@@ -317,7 +317,7 @@ mod test {
             .build();
 
         let mut contract = RewardProcessor::from(&vm);
-        let result = contract.constructor(U256::from(5000)); // 50% strict bonus
+        let result = contract.constructor(U256::from(5000));
         assert!(result.is_ok());
 
         let amount = U256::from(1000);
@@ -341,7 +341,7 @@ mod test {
             .build();
 
         let mut contract = RewardProcessor::from(&vm);
-        let result = contract.constructor(U256::from(5000)); // 50% strict bonus
+        let result = contract.constructor(U256::from(5000));
         assert!(result.is_ok());
 
         let amount = U256::from(1000);
@@ -378,5 +378,197 @@ mod test {
 
         let reward_after_end = contract.calculate_reward_at_time(amount, U256::from(3000), start_time, end_time, false, false);
         assert_eq!(reward_after_end, U256::from(500));
+    }
+
+    #[test]
+    fn test_constructor_invalid_multiply_factor() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        
+        let result = contract.constructor(U256::ZERO);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConstructorError::InvalidMultiplyFactor(_)
+        ));
+    }
+
+    #[test]
+    fn test_constructor_valid_initialization() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        
+        let multiply_factor = U256::from(12000);
+        let result = contract.constructor(multiply_factor);
+        assert!(result.is_ok());
+
+        // Check initial values
+        assert_eq!(contract.multiply_factor.get(), multiply_factor);
+        assert_eq!(contract.owner.get(), Address::from([0x01; 20]));
+        assert_eq!(contract.percentage_denominator.get(), U256::from(10000));
+        assert_eq!(contract.percentage_bonus.get(), U256::from(1000));
+    }
+
+    #[test]
+    fn test_update_percentage_bonus_success() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        assert_eq!(contract.percentage_bonus.get(), U256::from(1000));
+
+        let update_result = contract.update_percentage_bonus(U256::from(2000));
+        assert!(update_result.is_ok());
+        assert_eq!(contract.percentage_bonus.get(), U256::from(2000));
+    }
+
+    #[test]
+    fn test_update_percentage_bonus_unauthorized() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        let vm2 = TestVMBuilder::new()
+            .sender(Address::from([0x02; 20]))
+            .build();
+        
+        let mut contract2 = RewardProcessor::from(&vm2);
+        
+        let update_result = contract2.update_percentage_bonus(U256::from(2000));
+        assert!(update_result.is_err());
+        assert!(matches!(
+            update_result.unwrap_err(),
+            CommonError::Unauthorized(_)
+        ));
+    }
+
+    #[test]
+    fn test_update_percentage_bonus_zero_value() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        let update_result = contract.update_percentage_bonus(U256::ZERO);
+        assert!(update_result.is_err());
+        assert!(matches!(
+            update_result.unwrap_err(),
+            CommonError::ZeroValue(_)
+        ));
+    }
+
+    #[test]
+    fn test_update_multiply_factor_zero_value() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        let update_result = contract.update_multiply_factor(U256::ZERO);
+        assert!(update_result.is_err());
+        assert!(matches!(
+            update_result.unwrap_err(),
+            CommonError::InvalidMultiplyFactor(_)
+        ));
+    }
+
+    #[test]
+    fn test_get_pseudo_random_deterministic() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        let random1 = contract.get_pseudo_random();
+        let random2 = contract.get_pseudo_random();
+        assert_eq!(random1, random2);
+    }
+
+    #[test]
+    fn test_get_pseudo_random_different_states() {
+        let vm1 = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let vm2 = TestVMBuilder::new()
+            .sender(Address::from([0x02; 20]))
+            .build();
+
+        let mut contract1 = RewardProcessor::from(&vm1);
+        let mut contract2 = RewardProcessor::from(&vm2);
+        
+        let result1 = contract1.constructor(U256::from(5000));
+        let result2 = contract2.constructor(U256::from(5000));
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+
+        let random1 = contract1.get_pseudo_random();
+        let random2 = contract2.get_pseudo_random();
+        
+        assert!(random1 == true || random1 == false);
+        assert!(random2 == true || random2 == false);
+    }
+
+    #[test]
+    fn test_calculate_reward_current_time() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        let amount = U256::from(1000);
+        let start_time = U256::from(1000);
+        let end_time = U256::from(2000);
+
+        let reward = contract.calculate_reward(amount, start_time, end_time, false, false);
+        
+        assert!(reward >= U256::from(500));
+        assert!(reward <= U256::from(2000));
+    }
+
+    #[test]
+    fn test_reward_with_all_bonuses() {
+        let vm = TestVMBuilder::new()
+            .sender(Address::from([0x01; 20]))
+            .build();
+
+        let mut contract = RewardProcessor::from(&vm);
+        let result = contract.constructor(U256::from(5000));
+        assert!(result.is_ok());
+
+        let amount = U256::from(1000);
+        let start_time = U256::from(1000);
+        let end_time = U256::from(2000);
+
+        let reward = contract.calculate_reward_at_time(amount, U256::from(1000), start_time, end_time, true, true);
+        
+        assert!(reward >= U256::from(1600));
+        assert!(reward <= U256::from(3200));
     }
 }
