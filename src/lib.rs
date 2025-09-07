@@ -8,10 +8,7 @@ use alloc::vec::Vec;
 
 use alloy_sol_types::sol;
 
-use stylus_sdk::evm::log;
-use alloy_sol_types::SolEvent;
-
-use stylus_sdk::{alloy_primitives::U256, alloy_primitives::Address, prelude::*};
+use stylus_sdk::{alloy_primitives::U256, alloy_primitives::Address, prelude::*, crypto::keccak, evm};
 
 sol! {
     event MultiplyFactorUpdated(address indexed sender, uint256 multiply_factor);
@@ -108,7 +105,28 @@ impl RewardProcessor {
             reward += amount * self.multiply_factor.get() / self.percentage_denominator.get();
         }
 
+        if self.get_pseudo_random() {
+            reward = reward * U256::from(2);
+        }
+
         reward
+    }
+
+    pub fn get_pseudo_random(&self) -> bool {
+        let mut data = Vec::new();
+        data.extend_from_slice(&self.vm().block_timestamp().to_be_bytes());
+        data.extend_from_slice(&self.vm().block_number().to_be_bytes());
+        data.extend_from_slice(self.vm().tx_origin().as_slice());
+        data.extend_from_slice(&self.vm().tx_gas_price().to_be_bytes::<32>());
+        data.extend_from_slice(self.vm().msg_sender().as_slice());
+        
+        let random_hash = keccak(data);
+        
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&random_hash.as_slice()[0..8]);
+        let result = u64::from_be_bytes(bytes) % 100;
+
+        result == 0
     }
 
     pub fn update_multiply_factor(&mut self, new_factor: U256) -> Result<(), CommonError> {
@@ -120,7 +138,7 @@ impl RewardProcessor {
         
         self.multiply_factor.set(new_factor);
 
-        log(MultiplyFactorUpdated {
+        evm::log(MultiplyFactorUpdated {
             sender: self.vm().tx_origin(),
             multiply_factor: new_factor,
         });
@@ -137,7 +155,7 @@ impl RewardProcessor {
         
         self.percentage_bonus.set(new_bonus);
 
-        log(PercentageBonusUpdated {
+        evm::log(PercentageBonusUpdated {
             sender: self.vm().tx_origin(),
             percentage_bonus: new_bonus,
         });
@@ -156,7 +174,7 @@ impl RewardProcessor {
         self.assert_owner()?;
         self.owner.set(new_owner);
 
-        log(OwnershipTransferred {
+        evm::log(OwnershipTransferred {
             previous_owner: self.vm().tx_origin(),
             new_owner,
         });
